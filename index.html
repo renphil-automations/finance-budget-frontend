@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RenPhil Budget Form</title>
+
+  <!-- Load Poppins font with proper weights -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@200;300&display=swap" rel="stylesheet" />
+  <link href="modern.css" rel="stylesheet" /> <!-- Downloaded from unpkg SurveyJS core 1.9.128-->
+  <link href="custom.css" rel="stylesheet" />
+  <style>
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="login-container">
+  <img id="login-logo" src="logo.png" width="300" height="112" alt="Logo" />
+  <form id="login-form">
+    <label for="passcode">Passcode</label>
+    <input id="passcode" required autocomplete="current-password" />
+    <button type="submit">Login</button>
+  </form>
+</div>
+
+<div id="survey-header" style="display:none;">
+  <img id="login-logo" src="logo.png" width="200" height="74" alt="Logo" />
+  <button id="save-btn">Save</button>
+</div>
+
+<div id="surveyContainer" style="display:none;"></div>
+
+<!-- Spinner overlay -->
+<div id="status-overlay" style="display:none; position: fixed; top:0; left:0; width:100vw; height:100vh; backdrop-filter: blur(3px); background: rgba(255,255,255,0.6); z-index: 9999; text-align: center; padding-top: 20vh;">
+  <div style="display: inline-block; text-align: center; color: #f87248; font-weight: bold; font-size: 1.1em;">
+    <div class="spinner" style="border: 5px solid #f0f0f0; border-top: 5px solid #f87248; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; margin: auto;"></div>
+    <div id="status-message" style="margin-top: 12px;">Loading...</div>
+  </div>
+</div>
+
+<!-- Status message div -->
+<div id="status-msg" style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #f87248; color: white; padding: 10px 18px; border-radius: 6px; font-weight: 600; box-shadow: 0 2px 5px rgba(0,0,0,0.2); display: none; z-index: 10000;"></div>
+
+<script src="jquery-3.6.0.min.js"></script>
+<script src="survey.core.min.js"></script>
+<script src="survey.jquery.min.js"></script>
+
+<script>
+
+  
+  const backendBaseUrl = 'https://finance-budget-backend-362402010297.europe-west1.run.app'; 
+
+  const customCss = {
+    root: "my-root",
+    container: "my-container",
+    body: "my-body",
+    title: "my-title",
+    page: {
+      "title": "my-page-title"
+    },
+    description: "my-description",
+    question: {
+      main: "my-question",
+      title: "my-question-title",
+    },
+    navigationButton: "my-button",
+    progress: "my-progress",
+    progressBar: "my-progress-bar",
+    progressBarFill: "my-progress-bar-fill",
+    progressText: "my-progress-text"
+  };
+
+  async function loadSurveyFromBackend(passcode) {
+    try {
+      const response = await fetch(`${backendBaseUrl}/load`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode })
+      });
+      const result = await response.json();
+      if (!result.ok) {
+        throw new Error(result.error || 'Failed to load survey data');
+      }
+      return result;
+    } catch (err) {
+      hideOverlay();
+      showStatusMessage(`Data load failed: ${err.message}`);
+      throw err;
+    }
+  }
+
+  async function submitSurveyToBackend(passcode, data, isFinalSubmit = false) {
+    const response = await fetch(`${backendBaseUrl}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode, data, isFinalSubmit })
+    });
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error(result.error || 'Submit failed');
+    }
+    return result;
+  }
+
+  const loginForm = $('#login-form');
+  const loginContainer = $('#login-container');
+  const surveyContainer = $('#surveyContainer');
+  const surveyHeader = $('#survey-header');
+  const saveBtn = $('#save-btn');
+
+  document.getElementById('surveyContainer').addEventListener('wheel', function(e) {
+  if (e.target.matches('input[type=number], select')) {
+    e.preventDefault();
+  }
+}, { passive: false }); // Prevent that annoying mouse scrolling behavior that leads to negative values when scrolling down.
+
+  let passcode_persist = null;
+  let survey = null;
+
+  // Show/hide overlay with message and blur UI
+ function showOverlay(message) {
+  $('#status-message').text(message);
+  const overlay = $('#status-overlay');
+  overlay.show();
+
+
+  // Allow CSS transitions by toggling class asynchronously
+  setTimeout(() => overlay.addClass('visible'), 10);
+
+  loginContainer.css('pointer-events', 'none');
+  surveyContainer.css('pointer-events', 'none');
+  surveyHeader.css('pointer-events', 'none');
+}
+
+function hideOverlay() {
+  const overlay = $('#status-overlay');
+  overlay.removeClass('visible');
+
+  // Wait for transition to finish before hiding
+  setTimeout(() => overlay.hide(), 400);
+
+
+  loginContainer.css('pointer-events', '');
+  surveyContainer.css('pointer-events', '');
+  surveyHeader.css('pointer-events', '');
+}
+
+  let statusTimeout = null;
+  function showStatusMessage(message, duration = 4000) {
+    clearTimeout(statusTimeout);
+    const $statusMsg = $('#status-msg');
+    $statusMsg.text(message).fadeIn(200);
+    statusTimeout = setTimeout(() => {
+      $statusMsg.fadeOut(400);
+    }, duration);
+  }
+
+  loginForm.on('submit', async function(e) {
+    e.preventDefault();
+    const passcode = $('#passcode').val();
+
+    showOverlay('Authenticating and loading saved answers. \n\n Please do not close this page');
+
+    let loadResult;
+    try {
+      loadResult = await loadSurveyFromBackend(passcode); // Load the data filled previously by the user
+    } catch {
+      hideOverlay();
+      return;
+    }
+
+    passcode_persist = passcode;
+    let surveyJson = null; // Will store here from the backend
+    try {
+      const response = await fetch(`${backendBaseUrl}/definition`, { // Also load the JSON schema for the Survey from the backend
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json'},
+        body: JSON.stringify({ passcode: passcode_persist})
+      });
+
+      let surveyJsonPayload = await response.json(); // Apply it to more global variable
+
+      if (!response.ok || !surveyJsonPayload.ok) {
+        const errorMsg = result.error || 'Unknown error from server';
+        showStatusMessage(`Form schema loading failed: ${errorMsg}`, 6000);
+        console.error('Schema loading error details:', result);
+        return;
+      }
+      surveyJson = surveyJsonPayload['definition'];
+
+    } catch (err) {
+      hideOverlay();
+      showStatusMessage("Schema Load failed: " + err.message, 6000);
+      console.error('Schema load error:', err);
+    }
+
+    hideOverlay();
+    loginContainer.hide();
+    surveyHeader.show();
+    surveyContainer.show();
+
+    survey = new Survey.Model(surveyJson);
+    survey.css = customCss;
+    survey.showQuestionNumbers = false;
+    survey.showPageTitles = true;
+    survey.showTitle = false;
+    survey.showDescription = false;
+
+    // Prefill loaded data
+    if (loadResult.data) {
+      survey.data = loadResult.data;
+    }
+
+    // Disable save button if survey already completed. TODO: Double Check
+    // saveBtn.prop('disabled', !!loadResult.completed);
+
+    // On survey completion (final submit), validate fully
+    survey.onComplete.add(async function(srv) {
+      showOverlay('Submitting form and producing Google Sheet. \n\n Please do not close this page');
+      try {
+        await submitSurveyToBackend(passcode_persist, srv.data, true); // isFinalSubmit=true
+        hideOverlay();
+        saveBtn.remove();
+        showStatusMessage("Form submitted successfully!");
+      } catch (err) {
+        hideOverlay();
+        showStatusMessage("Submission failed: " + err.message, 6000);
+      }
+    });
+
+    survey.render('surveyContainer');
+  });
+
+  // Save button for partial save—skip strict validation
+  saveBtn.on('click', async function() {
+    if (!survey || !passcode_persist) {
+      showStatusMessage("No form or passcode available.");
+      return;
+    }
+
+    showOverlay('Saving progress to server. \n\n Please do not close this page');
+
+    try {
+      const response = await fetch(`${backendBaseUrl}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: passcode_persist, data: survey.data, isFinalSubmit: false })
+      });
+
+      const result = await response.json();
+
+      hideOverlay();
+
+      if (!response.ok || !result.ok) {
+        const errorMsg = result.error || 'Unknown error from server';
+        showStatusMessage(`Save failed: ${errorMsg}`, 6000);
+        console.error('Save error details:', result);
+        return;
+      }
+
+      showStatusMessage("Progress saved.");
+    } catch (err) {
+      hideOverlay();
+      showStatusMessage("Save failed: " + err.message, 6000);
+      console.error('Save fetch error:', err);
+    }
+  });
+</script>
+
+</body>
+</html>
