@@ -102,6 +102,10 @@ sv-popup {
   height: 0;
 }
 
+#passcode_signpost{
+  margin-top: 2em;
+}
+
 .sv-popup__container {
   background-color: var(--sjs-general-backcolor-dim, var(--background-dim, #f3f3f3));
   box-shadow: var(--sjs-shadow-large, 0px 8px 16px 0px rgba(0, 0, 0, 0.1));
